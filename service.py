@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import urllib.request
+from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 from datetime import datetime
 import os
@@ -687,11 +688,13 @@ class SyncService:
             try:
                 articles = self._get_articles_with_auto_refresh(source)
                 new_count = 0
+                new_articles = []
                 with self.db.connect() as conn:
                     for article in reversed(articles):
                         existed = article_exists(conn, article.review_id)
                         if not existed:
                             new_count += 1
+                            new_articles.append(article)
                         save_article(conn, article)
                     conn.commit()
                 result = SyncResult(source.id, len(articles), new_count, 0, "ok", "")
@@ -703,12 +706,32 @@ class SyncService:
                 result = SyncResult(source.id, 0, 0, 0, "error", str(exc))
             self.db.mark_sync_finish(source, run_id, result)
             if result.status == "ok" and result.new_count > 0:
+                notifications = []
+                active_hooks = any(
+                    wh.get("enabled") and wh.get("event_type", "all") in ("all", "new_articles")
+                    for wh in self.db.list_webhooks()
+                )
+                for article in new_articles:
+                    url = article.url
+                    if active_hooks and not url:
+                        try:
+                            url = self.resolve_article_url(article.review_id)
+                        except RiskControlError:
+                            logger.warning("Article link resolution stopped by risk control")
+                            break
+                        except Exception as exc:
+                            logger.warning("Article link resolution failed: %s", type(exc).__name__)
+                    short_match = re.fullmatch(r"MP_WXS_\d+_([A-Za-z0-9_~\-]{22})", article.review_id)
+                    short_id = short_match.group(1).replace("~", "_") if short_match else ""
+                    short_url = f"https://mp.weixin.qq.com/s/{short_id}" if short_id else ""
+                    notifications.append({"title": article.title, "url": url, "short_url": short_url})
                 self.notify_webhooks("new_articles", {
                     "source_id": source.id,
                     "source_name": source.name,
                     "book_id": source.book_id,
                     "new_count": result.new_count,
                     "received": result.received,
+                    "articles": notifications,
                 })
             return result
         finally:
@@ -722,7 +745,35 @@ class SyncService:
             if wh.get("event_type", "all") not in ("all", event):
                 continue
             try:
-                data = json.dumps({"event": event, **payload}, ensure_ascii=False).encode("utf-8")
+                is_dingtalk = urlsplit(wh["url"]).hostname == "oapi.dingtalk.com"
+                is_wxwork = urlsplit(wh["url"]).hostname == "qyapi.weixin.qq.com"
+                body = {"event": event, **payload}
+                if is_dingtalk:
+                    def markdown_escape(value):
+                        return re.sub(r"([\\`*_{}\[\]<>])", r"\\\1", str(value).replace("\n", " "))
+                    content = f"消息来源：{markdown_escape(payload.get('source_name', 'WeRSS'))}"
+                    for article in payload.get("articles", []):
+                        title = markdown_escape(article.get('title', '新文章'))
+                        short_url = article.get('short_url', '')
+                        if re.fullmatch(r"https://mp\.weixin\.qq\.com/s/[A-Za-z0-9_-]{22}", short_url):
+                            content += f"\n\n[{title}]({short_url})"
+                        else:
+                            content += f"\n\n{title}"
+                    body = {"msgtype": "markdown", "markdown": {"title": "新文章推送", "text": content}}
+                elif is_wxwork:
+                    def markdown_escape(value):
+                        return re.sub(r"([\\`*_{}\[\]<>])", r"\\\1", str(value).replace("\n", " "))
+                    source_name = payload.get('source_name', 'WeRSS')
+                    content = f"消息来源：{markdown_escape(source_name)}"
+                    for article in payload.get("articles", []):
+                        title = markdown_escape(article.get('title', '新文章'))
+                        short_url = article.get('short_url', '')
+                        if re.fullmatch(r"https://mp\.weixin\.qq\.com/s/[A-Za-z0-9_-]{22}", short_url):
+                            content += f"\n\n[{title}]({short_url})"
+                        else:
+                            content += f"\n\n{title}"
+                    body = {"msgtype": "markdown", "markdown": {"content": content}}
+                data = json.dumps(body, ensure_ascii=False).encode("utf-8")
                 req = urllib.request.Request(
                     wh["url"], data=data,
                     headers={"Content-Type": "application/json"},
@@ -730,10 +781,16 @@ class SyncService:
                 )
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     success = 200 <= resp.status < 300
-                    self.db.record_webhook_trigger(wh["id"], success)
+                    error = ""
+                    if is_dingtalk or is_wxwork:
+                        result = json.loads(resp.read(65536))
+                        success = success and result.get("errcode") == 0
+                        if not success:
+                            error = f"WeChat Work/DingTalk errcode={result.get('errcode')}: {result.get('errmsg', '')}"
+                    self.db.record_webhook_trigger(wh["id"], success, error)
             except Exception as exc:
-                logger.warning("Webhook %s failed: %s", wh["url"], exc)
-                self.db.record_webhook_trigger(wh["id"], False, str(exc))
+                logger.warning("Webhook %s failed: %s", wh["id"], type(exc).__name__)
+                self.db.record_webhook_trigger(wh["id"], False, type(exc).__name__)
 
     def _resolve_url_with_auto_refresh(self, review_id: str) -> str:
         record = self.credentials.get_record()

@@ -4,9 +4,10 @@ LABEL org.opencontainers.image.title="WeRSS" \
       org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN sed -i s@http://deb.debian.org@https://mirrors.tuna.tsinghua.edu.cn@g /etc/apt/sources.list.d/debian.sources
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
-    && python -m playwright install --with-deps chromium
+RUN pip install --no-cache-dir --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt \
+    && PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright python -m playwright install --with-deps chromium
 COPY . .
 RUN mkdir -p /app/data
 EXPOSE 8080
