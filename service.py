@@ -19,6 +19,10 @@ from typing import Any
 from weread_auth import WeReadAuthClient, WeReadAuthError, WeReadCredentials
 from article_identity import ArticleIdentityError, resolve_article_identity
 
+import weread_mint
+import risk_unlock
+import article_summary
+
 from wechat_mp_fetcher import (
     Article,
     AuthExpiredError,
@@ -637,7 +641,11 @@ class SyncService:
         self._refresh_lock = threading.Lock()
 
     def _client_for(self, record: WeReadCredentials) -> WeReadMobileClient:
-        headers = self.auth_client.version_headers() if record.profile.startswith("eink") else None
+        if record.profile.startswith("eink"):
+            headers = self.auth_client.version_headers()
+        else:
+            # App 式会话必须带 App 的版本头，否则服务端返回 401
+            headers = dict(weread_mint.PROFILE)
         return WeReadMobileClient(
             record.accessToken,
             record.vid,
@@ -656,12 +664,23 @@ class SyncService:
             record = self.credentials.get_record()
             if not record.can_refresh:
                 raise FetcherError("当前账号没有可用的 refreshToken/deviceId，请重新扫码登录")
-            if not record.profile.startswith("eink"):
-                raise FetcherError("当前会话不是 Web 扫码创建的可续期会话，请重新扫码登录后再使用自动续期")
-            try:
-                refreshed = self.auth_client.refresh(record)
-            except WeReadAuthError as exc:
-                raise AuthExpiredError(str(exc)) from exc
+
+            if record.profile.startswith("eink"):
+                # Web 扫码会话：走官方续期接口
+                try:
+                    refreshed = self.auth_client.refresh(record)
+                except WeReadAuthError as exc:
+                    raise AuthExpiredError(str(exc)) from exc
+            else:
+                # App 式会话：本地算签名换票，无需扫码、无需手机
+                got = weread_mint.mint(record)
+                if not got:
+                    raise AuthExpiredError("App 式续期失败，refreshToken 可能已失效")
+                token, new_refresh = got
+                record.accessToken = token
+                record.refreshToken = new_refresh
+                refreshed = record
+
             self.credentials.save_record(refreshed)
             return refreshed
 
@@ -671,11 +690,25 @@ class SyncService:
         try:
             return client.get_articles(source.book_id, count=20, synckey=0)
         except AuthExpiredError:
-            # Exactly one refresh + one retry.  Risk-control errors are never used as a trigger
-            # for credential rotation and are never automatically retried.
             refreshed = self.refresh_credentials()
             client = self._client_for(refreshed)
-            return client.get_articles(source.book_id, count=20, synckey=0)
+            try:
+                return client.get_articles(source.book_id, count=20, synckey=0)
+            except RiskControlError:
+                return self._retry_with_unlock(client, source)
+        except RiskControlError:
+            return self._retry_with_unlock(client, source)
+
+    def _retry_with_unlock(self, client, source: Source) -> list[Article]:
+        """撞风控时：电脑端过验证码拿 ticket，带上后重试一次。"""
+        logger.info("撞到风控，开始电脑端过验证码")
+        ticket = risk_unlock.unlock()
+        if not ticket:
+            logger.warning("验证码未通过，本源本次放弃")
+            raise RiskControlError("风控未解除")
+        client.set_risk_ticket(*ticket)
+        logger.info("已带上 ticket，重试该源")
+        return client.get_articles(source.book_id, count=20, synckey=0)
 
     def sync_source(self, source_id: int) -> SyncResult:
         source = self.db.get_source(source_id)
@@ -725,14 +758,16 @@ class SyncService:
                     short_id = short_match.group(1).replace("~", "_") if short_match else ""
                     short_url = f"https://mp.weixin.qq.com/s/{short_id}" if short_id else ""
                     notifications.append({"title": article.title, "url": url, "short_url": short_url})
-                self.notify_webhooks("new_articles", {
-                    "source_id": source.id,
-                    "source_name": source.name,
-                    "book_id": source.book_id,
-                    "new_count": result.new_count,
-                    "received": result.received,
-                    "articles": notifications,
-                })
+                # 每条文章单独推一条消息（避免一次堆很多条）
+                for item in notifications:
+                    self.notify_webhooks("new_articles", {
+                        "source_id": source.id,
+                        "source_name": source.name,
+                        "book_id": source.book_id,
+                        "new_count": 1,
+                        "received": result.received,
+                        "articles": [item],
+                    })
             return result
         finally:
             self._lock.release()
@@ -765,13 +800,32 @@ class SyncService:
                         return re.sub(r"([\\`*_{}\[\]<>])", r"\\\1", str(value).replace("\n", " "))
                     source_name = payload.get('source_name', 'WeRSS')
                     content = f"消息来源：{markdown_escape(source_name)}"
-                    for article in payload.get("articles", []):
+                    articles = payload.get("articles", [])
+                    budget = 3800          # 企业微信 markdown 上限 4096 字节，留余量
+                    used = 0
+                    shown = 0
+                    for i, article in enumerate(articles):
                         title = markdown_escape(article.get('title', '新文章'))
                         short_url = article.get('short_url', '')
                         if re.fullmatch(r"https://mp\.weixin\.qq\.com/s/[A-Za-z0-9_-]{22}", short_url):
-                            content += f"\n\n[{title}]({short_url})"
+                            chunk = f"\n\n[{title}]({short_url})"
                         else:
-                            content += f"\n\n{title}"
+                            chunk = f"\n\n{title}"
+                        if i < 3 and short_url:
+                            try:
+                                s_txt = article_summary.summary_of_url(short_url)
+                            except Exception:
+                                s_txt = ""
+                            if s_txt:
+                                chunk += f"\n> {markdown_escape(s_txt)}"
+                        size = len(chunk.encode("utf-8"))
+                        if used + size > budget:
+                            rest = len(articles) - shown
+                            content += f"\n\n…… 另有 {rest} 篇未展示"
+                            break
+                        content += chunk
+                        used += size
+                        shown += 1
                     body = {"msgtype": "markdown", "markdown": {"content": content}}
                 data = json.dumps(body, ensure_ascii=False).encode("utf-8")
                 req = urllib.request.Request(

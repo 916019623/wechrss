@@ -271,6 +271,11 @@ class WeReadMobileClient:
             headers["vid"] = str(vid)
         self.session.headers.update(headers)
 
+    def set_risk_ticket(self, ticket: str, randstr: str) -> None:
+        """验证通过后带上 wr_ticket / wr_randstr，风控标记才会解除。"""
+        self.session.headers["wr_ticket"] = ticket or ""
+        self.session.headers["wr_randstr"] = randstr or ""
+
     def _get_json(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         self.limiter.wait()
         response = self.session.get(MOBILE_BASE + path, params=params, timeout=self.timeout)

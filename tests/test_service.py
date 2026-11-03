@@ -126,11 +126,20 @@ def test_risk_control_does_not_refresh(tmp_path: Path, monkeypatch):
             calls["refresh"] += 1
             return record
 
+    # 撞风控时不刷新凭证；改为尝试电脑端解锁（由 risk_unlock 负责）
+    unlock_calls = {"n": 0}
+
+    def fake_unlock(wait=300):
+        unlock_calls["n"] += 1
+        return None          # 模拟解锁失败
+
     monkeypatch.setattr(service_module, "WeReadMobileClient", FakeMobileClient)
+    monkeypatch.setattr(service_module.risk_unlock, "unlock", fake_unlock)
     sync = SyncService(db, creds, auth_client=FakeAuth())
     result = sync.sync_source(source.id)
     assert result.status == "risk_control"
-    assert calls["refresh"] == 0
+    assert calls["refresh"] == 0          # 风控不能触发刷新
+    assert unlock_calls["n"] == 1         # 而是去解锁一次
 
 
 def test_backfill_missing_article_url(tmp_path: Path, monkeypatch):
