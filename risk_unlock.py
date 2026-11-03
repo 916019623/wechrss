@@ -38,6 +38,11 @@ def unlock(wait: int = 300):
         logger.warning("已有解锁流程在跑，跳过")
         return None
     try:
+        try:
+            import ai_config
+            ai_config.apply_to_env()      # 视觉模型的 key/模型名/endpoint 注入环境变量
+        except Exception:
+            pass
         mod = _load_auto_unlock()
         data = mod.solve(wait=wait)
         if data and data.get("ticket"):

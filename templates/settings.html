@@ -12,6 +12,7 @@
     <a href="#login" class="active"><span>账号连接</span><small>{{ '已登录' if credential_status.configured else '未登录' }}</small></a>
     <a href="#scheduler"><span>自动同步</span><small>{{ '运行中' if scheduler_enabled else '已暂停' }}</small></a>
     <a href="#backfill"><span>自动补全</span><small>{{ '已开启' if backfill_enabled else '已关闭' }}</small></a>
+    <a href="#ai"><span>AI 模型</span><small>{{ '已配置' if ai.text_key_set or ai.vision_key_set else '未配置' }}</small></a>
     <a href="#webhooks"><span>Webhook 推送</span><small>{{ webhooks|length ~ ' 个' if webhooks else '未配置' }}</small></a>
     <a href="#appearance"><span>外观</span></a>
     <a href="#backup"><span>数据备份</span></a>
@@ -115,6 +116,62 @@
         <div><strong>上次补全结果</strong><p>{{ backfill_last_result.get('resolved', 0) if backfill_last_result is mapping else backfill_last_result }} 篇成功{% if backfill_last_result is mapping %}，{{ backfill_last_result.get('failed', 0) }} 篇失败{% endif %}</p></div>
       </div>
       {% endif %}
+    </section>
+
+    <section class="card settings-section" id="ai">
+      <div class="card-header">
+        <div><h2>AI 模型</h2><p>配置文本模型（生成文章摘要）与视觉模型（自动通过验证码）的 API Key</p></div>
+        <span class="badge {{ 'ok' if ai.text_key_set or ai.vision_key_set else 'paused' }}">{{ '已配置' if ai.text_key_set or ai.vision_key_set else '未配置' }}</span>
+      </div>
+
+      <form method="post" action="/settings/ai">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+
+        <div class="setting-row">
+          <div>
+            <strong>文本模型</strong>
+            <p>用于给新文章生成摘要。{{ '当前已配置：' ~ ai.text_key_masked if ai.text_key_set else '尚未配置，推送将只带标题和链接。' }}</p>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div><strong>API Key</strong><p>留空表示不修改；填写新值会覆盖旧的。</p></div>
+          <input type="password" name="text_api_key" autocomplete="off"
+                 placeholder="{{ ai.text_key_masked or 'sk-...' }}" style="min-width:280px">
+        </div>
+        <div class="setting-row">
+          <div><strong>接口地址</strong><p>OpenAI 兼容格式的 base_url。</p></div>
+          <input type="text" name="text_base_url" value="{{ ai.text_base_url }}" style="min-width:280px">
+        </div>
+        <div class="setting-row">
+          <div><strong>模型名称</strong><p>例如 qwen-plus、gpt-4o-mini。</p></div>
+          <input type="text" name="text_model" value="{{ ai.text_model }}" style="min-width:200px">
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <strong>视觉模型</strong>
+            <p>用于识别验证码图片。{{ '当前已配置：' ~ ai.vision_key_masked if ai.vision_key_set else '尚未配置，遇到验证码将无法自动通过。' }}{% if ai.vision_reuses_text %}（与文本模型共用同一个 Key）{% endif %}</p>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div><strong>API Key</strong><p>留空表示沿用文本模型的 Key。</p></div>
+          <input type="password" name="vision_api_key" autocomplete="off"
+                 placeholder="{{ ai.vision_key_masked or '留空则沿用文本模型 Key' }}" style="min-width:280px">
+        </div>
+        <div class="setting-row">
+          <div><strong>接口地址</strong><p>视觉模型的 base_url。</p></div>
+          <input type="text" name="vision_base_url" value="{{ ai.vision_base_url }}" style="min-width:280px">
+        </div>
+        <div class="setting-row">
+          <div><strong>模型名称</strong><p>需要支持图片输入，例如 qwen3-vl-plus。</p></div>
+          <input type="text" name="vision_model" value="{{ ai.vision_model }}" style="min-width:200px">
+        </div>
+
+        <div class="setting-row">
+          <div><strong>保存</strong><p>保存后立即生效，无需重启服务。</p></div>
+          <button class="button primary" type="submit">保存 AI 配置</button>
+        </div>
+      </form>
     </section>
 
     <section class="card settings-section" id="webhooks">

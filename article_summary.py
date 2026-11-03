@@ -24,6 +24,13 @@ PROMPT = ("下面是一篇公众号文章。请用 60~90 个汉字概括它的�
 
 
 def _key() -> str:
+    try:
+        import ai_config
+        k = ai_config.text_key()
+        if k:
+            return k
+    except Exception:
+        pass
     key = os.getenv("DASHSCOPE_API_KEY", "").strip()
     if key:
         return key
@@ -71,8 +78,13 @@ def summary_of_url(url: str) -> str:
         return ""
     try:
         from openai import OpenAI
-        cli = OpenAI(api_key=key, base_url=BASE_URL, timeout=60)
-        r = cli.chat.completions.create(model=MODEL, messages=[
+        try:
+            import ai_config
+            base, model = ai_config.text_base_url(), ai_config.text_model()
+        except Exception:
+            base, model = BASE_URL, MODEL
+        cli = OpenAI(api_key=key, base_url=base, timeout=60)
+        r = cli.chat.completions.create(model=model, messages=[
             {"role": "user", "content": PROMPT + text[:MAX_CHARS]}])
         s = (r.choices[0].message.content or "").strip()
         return re.sub(r"\s+", " ", s)[:180]

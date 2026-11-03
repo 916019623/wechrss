@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ai_config
+
 import argparse
 import base64
 import hmac
@@ -112,6 +114,11 @@ class WebApp:
         self.credentials = credentials
         self.service = service
         self.scheduler = scheduler
+        ai_config.bind(db)
+        try:
+            ai_config.apply_to_env()
+        except Exception:
+            pass
         self.login_manager = login_manager or LoginManager(service.auth_client, credentials.save_record)
         self.admin_password = os.getenv("ADMIN_PASSWORD", "")
         self.csrf_token = os.getenv("WECHAT_MP_CSRF_TOKEN", "") or secrets.token_urlsafe(32)
@@ -404,6 +411,7 @@ class WebApp:
                     backfill_interval=self.scheduler.backfill_interval,
                     backfill_last_result=backfill_last_result,
                     webhooks=self.db.list_webhooks(),
+                    ai=ai_config.summary_for_ui(),
                 )
 
             if path == "/settings/login/start" and method == "POST":
@@ -449,6 +457,30 @@ class WebApp:
                     self.scheduler.set_backfill_interval(interval)
                     return self._redirect(start_response, "/settings?message=" + quote("补全设置已保存") + "#backfill")
                 return self._redirect(start_response, "/settings#backfill")
+
+            if path == "/settings/ai" and method == "POST":
+                form = self._form(environ); self._require_csrf(form)
+                payload = {}
+                # Key 留空表示不修改，避免每次保存都要重新输入
+                for field, key in (("text_api_key", "ai.text_api_key"),
+                                   ("vision_api_key", "ai.vision_api_key")):
+                    val = (form.get(field) or "").strip()
+                    if val:
+                        payload[key] = val
+                for field, key in (("text_base_url", "ai.text_base_url"),
+                                   ("text_model", "ai.text_model"),
+                                   ("vision_base_url", "ai.vision_base_url"),
+                                   ("vision_model", "ai.vision_model")):
+                    if field in form:
+                        payload[key] = (form.get(field) or "").strip()
+                try:
+                    ai_config.save(**payload)
+                    ai_config.apply_to_env()
+                except Exception as exc:
+                    return self._redirect(start_response, "/settings?error=" +
+                                          quote(f"保存失败：{exc}") + "#ai")
+                return self._redirect(start_response, "/settings?message=" +
+                                      quote("AI 模型配置已保存") + "#ai")
 
             if path == "/settings/webhooks" and method == "POST":
                 form = self._form(environ); self._require_csrf(form)
