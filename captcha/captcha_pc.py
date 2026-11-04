@@ -197,6 +197,13 @@ def open_page():
     with open(PAGE, "w", encoding="utf-8") as f:
         f.write(HTML)
     chrome = find_chrome()
+
+    # Linux 上如果没有显示（没装 Xvfb），自动退化为无头，避免直接失败
+    headless = HEADLESS
+    if not IS_WIN and not headless and not (os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")):
+        log("未检测到 DISPLAY，自动改用无头模式")
+        headless = True
+
     args = [
         f"--remote-debugging-port={PORT}",
         f"--user-data-dir={PROFILE}",
@@ -208,7 +215,7 @@ def open_page():
         "--disable-gpu",
         "--lang=zh-CN",
     ]
-    if HEADLESS:
+    if headless:
         args.append("--headless=new")
     if not IS_WIN:
         # 容器里通常是 root，必须关沙箱，否则 chrome 直接退出
@@ -246,6 +253,33 @@ def screenshot(path: str | None = None) -> str:
     return out
 
 
+def self_check() -> int:
+    """环境自检：浏览器、显示、端口、依赖。"""
+    ok = True
+    print(f"平台      : {'Windows' if IS_WIN else 'Linux/其它'}")
+    print(f"工作目录  : {WORK}")
+    print(f"profile   : {PROFILE}")
+    print(f"调试端口  : {PORT}")
+    try:
+        print(f"浏览器    : {find_chrome()}")
+    except Exception as exc:
+        ok = False
+        print(f"浏览器    : 未找到（{exc}）")
+    if not IS_WIN:
+        disp = os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY") or ""
+        print(f"DISPLAY   : {disp or '（无，将自动使用无头模式）'}")
+    try:
+        import websocket  # noqa: F401
+        from PIL import Image  # noqa: F401
+        print("依赖      : websocket-client / Pillow 正常")
+    except Exception as exc:
+        ok = False
+        print(f"依赖      : 缺失 {type(exc).__name__}")
+    print(f"端口占用  : {'有进程' if _pids_on_port(PORT) else '空闲'}")
+    print("结论      :", "可用" if ok else "需要处理")
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
     import sys
     cmd = sys.argv[1] if len(sys.argv) > 1 else "open"
@@ -258,3 +292,5 @@ if __name__ == "__main__":
         print(screenshot(sys.argv[2] if len(sys.argv) > 2 else None))
     elif cmd == "ping":
         print("alive" if cdp_ping() else "dead")
+    elif cmd == "check":
+        raise SystemExit(self_check())

@@ -12,3 +12,5 @@ data/
 credentials.json
 .env
 *.pyc
+captcha_work/
+captcha_work

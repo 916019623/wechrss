@@ -26,6 +26,10 @@ def _load():
     if _mod is not None:
         return _mod
 
+    for p in (HERE, os.path.join(HERE, "captcha")):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
     if os.path.exists(BUILTIN):
         capdir = os.path.join(HERE, "captcha")
         if capdir not in sys.path:

@@ -50,6 +50,10 @@ def _cfg():
     """返回 (key, base_url, model)。"""
     key = base = model = ""
     try:
+        import sys as _sys
+        root = os.path.dirname(HERE)
+        if root not in _sys.path:
+            _sys.path.insert(0, root)
         import ai_config
         key = ai_config.vision_key()
         base = ai_config.vision_base_url()
