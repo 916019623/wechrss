@@ -3,6 +3,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
+      TZ: Asia/Shanghai
       # 推荐 Web 扫码登录；这些变量只为兼容旧版手工凭证。
       WEREAD_ACCESS_TOKEN: ${WEREAD_ACCESS_TOKEN:-}
       WEREAD_VID: ${WEREAD_VID:-}
@@ -19,6 +20,8 @@ services:
       SCHEDULER_POLL_SECONDS: ${SCHEDULER_POLL_SECONDS:-30}
     volumes:
       - ./data:/app/data
+      - ./captcha_work:/app/captcha_work
+    shm_size: "1gb"
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
     healthcheck:
