@@ -16,6 +16,7 @@ import platform
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.request
 
@@ -29,7 +30,8 @@ APPID = "2044038556"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.getenv("CAPTCHA_WORK") or os.path.join(os.path.dirname(HERE), "captcha_work")
-PROFILE = os.path.join(WORK, "chrome_profile")
+PROFILE = os.getenv("CAPTCHA_PROFILE") or os.path.join(
+    tempfile.gettempdir(), "wxread-chrome-profile")
 PAGE = os.path.join(WORK, "tcaptcha.html")
 SHOT = os.path.join(WORK, "captcha_now.png")
 
@@ -179,9 +181,19 @@ def cdp_ping(timeout: int = 4) -> bool:
         return False
 
 
+def _clear_profile_locks():
+    """清掉 Chrome 的 Singleton 锁（容器重建后旧锁会让 Chrome 拒绝启动）。"""
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        try:
+            os.remove(os.path.join(PROFILE, name))
+        except OSError:
+            pass
+
+
 def open_page():
     os.makedirs(PROFILE, exist_ok=True)
     os.makedirs(WORK, exist_ok=True)
+    _clear_profile_locks()
     with open(PAGE, "w", encoding="utf-8") as f:
         f.write(HTML)
     chrome = find_chrome()
@@ -202,11 +214,25 @@ def open_page():
         # 容器里通常是 root，必须关沙箱，否则 chrome 直接退出
         args.extend(["--no-sandbox", "--disable-setuid-sandbox"])
     args.append("file://" + PAGE.replace("\\", "/"))
+    os.makedirs(WORK, exist_ok=True)
+    errlog = open(os.path.join(WORK, "chrome.log"), "ab")
     subprocess.Popen([chrome] + args,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     stdout=errlog, stderr=errlog,
                      start_new_session=not IS_WIN)
-    time.sleep(7)
-    log("Chrome 已启动")
+
+    # 等调试端口真正就绪（容器里冷启动可能要 10~30 秒，固定 sleep 不可靠）
+    deadline = time.time() + int(os.getenv("CAPTCHA_START_TIMEOUT", "45"))
+    waited = 0.0
+    while time.time() < deadline:
+        try:
+            http_json("/json/version")
+            log(f"Chrome 已就绪（等待 {waited:.0f}s）")
+            return
+        except Exception:
+            time.sleep(1.5)
+            waited += 1.5
+    log("Chrome 启动超时（45s 内未开调试端口）")
+    raise RuntimeError("Chrome 启动超时")
 
 
 def screenshot(path: str | None = None) -> str:

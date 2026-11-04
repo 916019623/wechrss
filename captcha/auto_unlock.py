@@ -130,10 +130,15 @@ def _submit(c):
 def solve(wait: int = 300, poll: int = 6):
     if not ensure_page():
         return None
-    try:
-        c = cp.CDP()
-    except Exception as exc:
-        log(f"连接浏览器失败 {type(exc).__name__}")
+    c = None
+    for attempt in range(3):
+        try:
+            c = cp.CDP()
+            break
+        except Exception as exc:
+            log(f"连接浏览器失败 {type(exc).__name__}（第 {attempt + 1} 次）")
+            time.sleep(5)
+    if c is None:
         return None
 
     try:
