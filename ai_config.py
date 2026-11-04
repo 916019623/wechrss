@@ -26,14 +26,49 @@ def bind(db) -> None:
     _db = db
 
 
-def _get(key: str, default: str = "") -> str:
-    if _db is not None:
+class _LazyDB:
+    """没有注入 DB 时，按环境变量/默认路径打开（供脚本单独运行）。"""
+
+    def __init__(self) -> None:
+        self._path = None
+
+    def _resolve(self):
+        if self._path:
+            return self._path
+        import os as _os
+        p = _os.getenv("WECHAT_MP_DB", "").strip()
+        if not p:
+            p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "wechat_mp.db")
+        self._path = p
+        return p
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        import sqlite3
+        path = self._resolve()
         try:
-            v = _db.get_setting(key, "")
-            if v:
-                return v
+            con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+            try:
+                row = con.execute("select value from app_settings where key=?", (key,)).fetchone()
+            finally:
+                con.close()
+            return str(row[0]) if row else default
         except Exception:
-            pass
+            return default
+
+    def set_setting(self, key: str, value: str) -> None:
+        raise RuntimeError("只读模式，无法保存设置")
+
+
+def _get(key: str, default: str = "") -> str:
+    global _db
+    if _db is None:
+        _db = _LazyDB()
+    try:
+        v = _db.get_setting(key, "")
+        if v:
+            return v
+    except Exception:
+        pass
     env = {"ai.text_api_key": "DASHSCOPE_API_KEY",
            "ai.vision_api_key": "DASHSCOPE_API_KEY",
            "ai.text_base_url": "DASHSCOPE_BASE_URL",
