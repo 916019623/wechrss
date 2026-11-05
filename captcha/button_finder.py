@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-"""在截图里定位「确定」按钮的坐标（蓝色按钮，位于弹窗右下角）。
-
-不同题型弹窗高度会变（有的带「换一组」，有的不带），固定坐标会点空。
-"""
+"""button_finder：用连通域找「确定」按钮（右下角、宽 50~80、高 22~36 的蓝色块）。"""
 from __future__ import annotations
 
 import os
@@ -14,49 +11,47 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.getenv("CAPTCHA_WORK") or os.path.join(os.path.dirname(HERE), "captcha_work")
 
 
-def find_submit_button(img_path: str, min_run: int = 40):
-    """返回 (x, y)；找不到返回 None。"""
+def _is_blue(c) -> bool:
+    r, g, b = c[0], c[1], c[2]
+    return b > 170 and r < 90 and 100 <= g <= 200
+
+
+def find_submit_button(img_path: str):
     im = Image.open(img_path).convert("RGB")
     w, h = im.size
     px = im.load()
 
-    def is_blue(p):
-        r, g, b = p[0], p[1], p[2]
-        return b > 170 and r < 90 and 100 <= g <= 190
-
-    # 从弹窗下半部分往上扫，找第一条足够长的蓝色横条
-    best = None
-    y = h - 1
-    while y > h // 2:
-        run_start = None
-        run_len = 0
-        for x in range(w):
-            if is_blue(px[x, y]):
-                if run_start is None:
-                    run_start = x
-                run_len += 1
-            else:
-                if run_start is not None and run_len >= min_run:
-                    if best is None:
-                        best = (run_start, x - 1, y, run_len)
-                    break
-                run_start = None
-                run_len = 0
-        if best and best[2] - y > 14:      # 已经越过按钮高度，取中间行
-            break
-        y -= 1
+    seen = [[False] * h for _ in range(w)]
+    best = None  # (x1, x0, y0, y1)
+    for sx in range(0, w, 2):
+        for sy in range(int(h * 0.45), h, 2):
+            if seen[sx][sy] or not _is_blue(px[sx, sy]):
+                continue
+            stack = [(sx, sy)]
+            seen[sx][sy] = True
+            x0 = x1 = sx
+            y0 = y1 = sy
+            count = 0
+            while stack and count < 20000:
+                x, y = stack.pop()
+                count += 1
+                x0, x1 = min(x0, x), max(x1, x)
+                y0, y1 = min(y0, y), max(y1, y)
+                for dx, dy in ((2, 0), (-2, 0), (0, 2), (0, -2)):
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < w and 0 <= ny < h and not seen[nx][ny] and _is_blue(px[nx, ny]):
+                        seen[nx][ny] = True
+                        stack.append((nx, ny))
+            bw, bh = x1 - x0, y1 - y0
+            # 按钮特征：宽度 45~90，高度 20~40，且靠右下
+            if 45 <= bw <= 90 and 18 <= bh <= 40:
+                if best is None or x1 > best[0]:
+                    best = (x1, x0, y0, y1)
 
     if not best:
         return None
-    x0, x1, y_bottom, _ = best
-    # 继续往上找按钮顶边，取中间
-    top = y_bottom
-    while top > 0:
-        cnt = sum(1 for x in range(x0, x1 + 1) if is_blue(px[x, top - 1]))
-        if cnt < (x1 - x0 + 1) // 2:
-            break
-        top -= 1
-    return ((x0 + x1) // 2, (top + y_bottom) // 2)
+    x1, x0, y0, y1 = best
+    return ((x0 + x1) // 2, (y0 + y1) // 2)
 
 
 if __name__ == "__main__":
