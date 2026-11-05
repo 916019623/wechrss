@@ -171,15 +171,17 @@ def clicks_for(img_path, challenge_text=""):
                     {"type": "image_url",
                      "image_url": {"url": f"data:image/png;base64,{_b64(im.crop(box), SCALE_TILE)}"}},
                     {"type": "text", "text":
-                        f"这一格图片里是否**包含或就是**「{kw}」？"
-                        "只回答一个字：是 或 否。不要解释。"},
+                        f"先用 2~4 个词写出这张图的主要物体；再判断这些物体里有没有「{kw}」"
+                        f"（含同义词，例如 栅栏=围栏、列车=火车）。\n"
+                        "严格按这个格式输出一行：物体1、物体2|是  或  物体1、物体2|否"},
                 ])
             except Exception as exc:
                 _log(f"第 {idx} 格判断失败 {type(exc).__name__}")
                 continue
-            a = ans.strip()
-            hit = a.startswith("是") or a.lower().startswith("yes")
-            _log(f"  第{idx}格 -> {a[:8]}")
+            a = ans.replace("\n", " ").strip()
+            verdict = a.split("|")[-1].strip() if "|" in a else a
+            hit = verdict.startswith("是")
+            _log(f"  第{idx}格 -> {a[:40]} => {'选' if hit else '不选'}")
             if hit:
                 nums.append(idx)
     else:
