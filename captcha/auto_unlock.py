@@ -119,10 +119,78 @@ def bring_front():
         pass
 
 
+WIN_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+
+def _mimic_browser(c):
+    """把浏览器伪装成 Windows 桌面 Chrome + 中国时区。"""
+    try:
+        c.send("Network.enable")
+        c.send("Network.setUserAgentOverride", userAgent=WIN_UA,
+               acceptLanguage="zh-CN,zh;q=0.9",
+               platform="Win32")
+    except Exception:
+        pass
+    for method, params in (
+        ("Emulation.setTimezoneOverride", {"timezoneId": "Asia/Shanghai"}),
+        ("Emulation.setLocaleOverride", {"locale": "zh-CN"}),
+    ):
+        try:
+            c.send(method, **params)
+        except Exception:
+            pass
+
+
+def _human_move(c, x, y):
+    """模拟人手移动：分多步移动 + 轻微抖动。"""
+    import math
+    import random
+    try:
+        start = (random.randint(280, 620), random.randint(420, 700))
+    except Exception:
+        start = (450, 560)
+    sx, sy = start
+    steps = random.randint(14, 26)
+    for i in range(1, steps + 1):
+        t = i / steps
+        # 缓动曲线，起手快、落点慢
+        ease = 1 - (1 - t) ** 3
+        nx = sx + (x - sx) * ease + random.uniform(-2.5, 2.5)
+        ny = sy + (y - sy) * ease + random.uniform(-2.5, 2.5)
+        try:
+            c.send("Input.dispatchMouseEvent", type="mouseMoved",
+                   x=round(nx, 1), y=round(ny, 1), button="none")
+        except Exception:
+            return
+        time.sleep(random.uniform(0.008, 0.03))
+    try:
+        c.send("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y, button="none")
+    except Exception:
+        pass
+
+
+def _human_click(c, x, y):
+    """先移动再按下，按下与抬起之间留随机间隔。"""
+    import random
+    _human_move(c, x, y)
+    time.sleep(random.uniform(0.05, 0.18))
+    try:
+        c.send("Input.dispatchMouseEvent", type="mousePressed", x=x, y=y,
+               button="left", buttons=1, clickCount=1)
+    except Exception:
+        pass
+    time.sleep(random.uniform(0.06, 0.16))
+    try:
+        c.send("Input.dispatchMouseEvent", type="mouseReleased", x=x, y=y,
+               button="left", buttons=0, clickCount=1)
+    except Exception:
+        pass
+    time.sleep(random.uniform(0.1, 0.3))
+
+
 def _apply_click(c, x, y):
-    for t in ("mousePressed", "mouseReleased"):
-        c.send("Input.dispatchMouseEvent", type=t, x=float(x), y=float(y),
-               button="left", clickCount=1)
+    _human_click(c, float(x), float(y))
 
 
 def _submit(c, pos=None):
@@ -131,7 +199,35 @@ def _submit(c, pos=None):
     _apply_click(c, x, y)
 
 
+def _kill_all_chrome():
+    """兜底清理：杀掉所有带调试端口的浏览器进程树。"""
+    import subprocess
+    try:
+        if IS_WIN:
+            subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"],
+                           capture_output=True, timeout=20)
+        else:
+            subprocess.run(["pkill", "-9", "-f", "remote-debugging-port"],
+                           capture_output=True, timeout=20)
+            subprocess.run(["pkill", "-9", "-f", "chrome-linux"],
+                           capture_output=True, timeout=20)
+    except Exception:
+        pass
+
+
 def solve(wait: int = 300, poll: int = 6):
+    """对外入口：无论成功失败，结束后一定关掉浏览器，防止进程泄漏。"""
+    try:
+        return _solve_inner(wait=wait, poll=poll)
+    finally:
+        try:
+            cp.kill_browser()
+        except Exception:
+            pass
+        _kill_all_chrome()
+
+
+def _solve_inner(wait: int = 300, poll: int = 6):
     if not ensure_page():
         return None
     c = None
@@ -144,6 +240,8 @@ def solve(wait: int = 300, poll: int = 6):
             time.sleep(5)
     if c is None:
         return None
+
+    _mimic_browser(c)
 
     try:
         c.send("Page.enable")
