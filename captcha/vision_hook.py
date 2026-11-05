@@ -154,27 +154,53 @@ def clicks_for(img_path, challenge_text=""):
 
     x0, y0, x1, y1 = GRID
     w, h = (x1 - x0) / 3.0, (y1 - y0) / 2.0
-    content = []
+    boxes = []
     for i in range(1, 7):
         r_, c_ = divmod(i - 1, 3)
-        box = (int(x0 + c_ * w), int(y0 + r_ * h), int(x0 + (c_ + 1) * w), int(y0 + (r_ + 1) * h))
-        content.append({"type": "text", "text": f"第 {i} 格："})
-        content.append({"type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{_b64(im.crop(box), SCALE_TILE)}"}})
-    content.append({"type": "text", "text": JUDGE_PROMPT.format(key=kw)})
-    try:
-        out = _ask(client, model, content)
-    except Exception as exc:
-        _log(f"判断失败 {type(exc).__name__}: {str(exc)[:100]}")
-        return None
-    _log(f"判断: {out[:120]}")
+        boxes.append((int(x0 + c_ * w), int(y0 + r_ * h),
+                      int(x0 + (c_ + 1) * w), int(y0 + (r_ + 1) * h)))
 
+    multi = ("所有" in txt) or ("全部" in txt)
     nums = []
-    try:
-        s = out[out.find("{"): out.rfind("}") + 1]
-        nums = [int(x) for x in json.loads(s).get("tiles", [])]
-    except Exception:
-        nums = [int(x) for x in re.findall(r"[1-6]", out)]
+
+    if multi:
+        # 「选择所有符合的」用逐格二元判断：模型对单格是/否比一次多选准得多
+        for idx, box in enumerate(boxes, 1):
+            try:
+                ans = _ask(client, model, [
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/png;base64,{_b64(im.crop(box), SCALE_TILE)}"}},
+                    {"type": "text", "text":
+                        f"这一格图片里是否**包含或就是**「{kw}」？"
+                        "只回答一个字：是 或 否。不要解释。"},
+                ])
+            except Exception as exc:
+                _log(f"第 {idx} 格判断失败 {type(exc).__name__}")
+                continue
+            a = ans.strip()
+            hit = a.startswith("是") or a.lower().startswith("yes")
+            _log(f"  第{idx}格 -> {a[:8]}")
+            if hit:
+                nums.append(idx)
+    else:
+        content = []
+        for i, box in enumerate(boxes, 1):
+            content.append({"type": "text", "text": f"第 {i} 格："})
+            content.append({"type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{_b64(im.crop(box), SCALE_TILE)}"}})
+        content.append({"type": "text", "text": JUDGE_PROMPT.format(key=kw)})
+        try:
+            out = _ask(client, model, content)
+        except Exception as exc:
+            _log(f"判断失败 {type(exc).__name__}: {str(exc)[:100]}")
+            return None
+        _log(f"判断: {out[:120]}")
+        try:
+            s = out[out.find("{"): out.rfind("}") + 1]
+            nums = [int(x) for x in json.loads(s).get("tiles", [])]
+        except Exception:
+            nums = [int(x) for x in re.findall(r"[1-6]", out)]
+
     nums = sorted({n for n in nums if 1 <= n <= 6})
     if not nums:
         _log("没有可用编号")

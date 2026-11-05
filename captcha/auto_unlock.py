@@ -38,6 +38,7 @@ def _load(name: str):
 
 cp = _load("captcha_pc")
 vh = _load("vision_hook")
+bf = _load("button_finder")
 
 
 def log(m):
@@ -123,8 +124,10 @@ def _apply_click(c, x, y):
                button="left", clickCount=1)
 
 
-def _submit(c):
-    _apply_click(c, 582, 705)
+def _submit(c, pos=None):
+    """点「确定」。按钮位置按截图动态定位，避免弹窗高度变化时点空。"""
+    x, y = pos if pos else (582, 705)
+    _apply_click(c, x, y)
 
 
 def solve(wait: int = 300, poll: int = 6):
@@ -227,7 +230,14 @@ def solve(wait: int = 300, poll: int = 6):
             _apply_click(c, x, y)
             time.sleep(0.6)
         time.sleep(1)
-        _submit(c)
+        pos = None
+        try:
+            pos = bf.find_submit_button(SHOT)
+        except Exception:
+            pos = None
+        if pos:
+            log(f"  确定按钮位置: {pos}")
+        _submit(c, pos)
         time.sleep(4)
         data = dump_result(c)
         if data:
