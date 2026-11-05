@@ -39,6 +39,7 @@ def _load(name: str):
 cp = _load("captcha_pc")
 vh = _load("vision_hook")
 bf = _load("button_finder")
+sc = _load("selection_check")
 
 
 def log(m):
@@ -178,6 +179,21 @@ def solve(wait: int = 300, poll: int = 6):
             log(f"截图失败 {type(exc).__name__}，重开浏览器")
             return None
         log(f"第 {round_no} 题：{txt.strip()[:40]!r} 截图已就绪")
+        # 页面可能还没渲染完（截到空白就检测不到宫格），这里重试
+        for _try in range(30):
+            try:
+                if sc.detect_grid(__import__("PIL.Image", fromlist=["Image"]).open(SHOT).convert("RGB")):
+                    break
+            except Exception:
+                pass
+            log("  宫格未就绪，等待重截…")
+            time.sleep(2)
+            try:
+                r_wait = c.send("Page.captureScreenshot", format="png")
+                with open(SHOT, "wb") as f:
+                    f.write(base64.b64decode(r_wait["data"]))
+            except Exception:
+                pass
 
         try:
             title = vh.read_title(SHOT) if vh is not None else ""
@@ -197,11 +213,19 @@ def solve(wait: int = 300, poll: int = 6):
         if "包含文字" in title and kw:
             bring_front()
 
+        nums = None
         pts = None
         try:
-            pts = vh.clicks_for(SHOT, txt)
+            nums = vh.choose_tiles(SHOT, txt)
         except Exception as exc:
-            log(f"  视觉模型异常: {type(exc).__name__}")
+            log(f"  视觉模型异常 {type(exc).__name__}")
+        if nums:
+            try:
+                cen = sc.centers(SHOT) or vh._centers()
+            except Exception:
+                cen = vh._centers()
+            pts = [list(cen[n]) for n in nums if n in cen]
+            log(f"  目标格子 {nums} → 坐标 {pts}")
 
         if not pts:
             # 人工兜底：等 CAPTCHA_NEEDED 对应的点击方案，最多 120 秒
@@ -226,10 +250,49 @@ def solve(wait: int = 300, poll: int = 6):
             log("  没有可用方案，本轮放弃")
             return None
 
+        # 点击前拍基准帧，用于判断点击是否真的生效
+        pre_path = os.path.join(WORK, "pre_click.png")
+        try:
+            r_pre = c.send("Page.captureScreenshot", format="png")
+            with open(pre_path, "wb") as f:
+                f.write(base64.b64decode(r_pre["data"]))
+        except Exception:
+            pre_path = None
+
         for x, y in pts:
             _apply_click(c, x, y)
             time.sleep(0.6)
         time.sleep(1)
+
+        # 提交前核对勾选（用点击前后画面差异判断，避免颜色误判）
+        if nums:
+            try:
+                chk_path = os.path.join(WORK, "check_selected.png")
+                r_chk = c.send("Page.captureScreenshot", format="png")
+                with open(chk_path, "wb") as f:
+                    f.write(base64.b64decode(r_chk["data"]))
+                got = sc.changed_tiles(pre_path or SHOT, chk_path)
+                want = sorted(nums)
+                if got != want:
+                    log(f"  勾选不符：实际 {got}，期望 {want}，补点一次")
+                    try:
+                        cen2 = sc.centers(chk_path) or vh._centers()
+                    except Exception:
+                        cen2 = vh._centers()
+                    for n in sorted(set(want) - set(got)):
+                        if n in cen2:
+                            _apply_click(c, cen2[n][0], cen2[n][1])
+                            log(f"  补点第 {n} 格")
+                            time.sleep(0.4)
+                    time.sleep(0.8)
+                    r_chk2 = c.send("Page.captureScreenshot", format="png")
+                    with open(chk_path, "wb") as f:
+                        f.write(base64.b64decode(r_chk2["data"]))
+                    log(f"  补点后差异：{sc.changed_tiles(pre_path or SHOT, chk_path)}")
+                else:
+                    log("  勾选核对通过")
+            except Exception as exc:
+                log(f"  勾选核对异常 {type(exc).__name__}")
         pos = None
         try:
             pos = bf.find_submit_button(SHOT)

@@ -130,8 +130,8 @@ def read_title(img_path, client=None, model=None):
         return ""
 
 
-def clicks_for(img_path, challenge_text=""):
-    """返回该点哪几格的坐标列表；失败返回 None。"""
+def choose_tiles(img_path, challenge_text=""):
+    """返回该点哪几格的**编号**（1..6）；失败返回 None。"""
     client, model = _client()
     if client is None:
         return None
@@ -208,7 +208,14 @@ def clicks_for(img_path, challenge_text=""):
         _log("没有可用编号")
         return None
 
+    _log(f"选择格子: {nums}")
+    return nums
+
+
+def clicks_for(img_path, challenge_text=""):
+    """兼容旧接口：返回格子中心坐标列表。"""
+    nums = choose_tiles(img_path, challenge_text)
+    if not nums:
+        return None
     cen = _centers()
-    pts = [list(cen[n]) for n in nums]
-    _log(f"点击方案: {pts}")
-    return pts
+    return [list(cen[n]) for n in nums]
