@@ -13,6 +13,7 @@ import base64
 import json
 import os
 import platform
+import signal
 import re
 import shutil
 import subprocess
@@ -34,6 +35,8 @@ PROFILE = os.getenv("CAPTCHA_PROFILE") or os.path.join(
     tempfile.gettempdir(), "wxread-chrome-profile")
 PAGE = os.path.join(WORK, "tcaptcha.html")
 SHOT = os.path.join(WORK, "captcha_now.png")
+
+_PROC = None   # 最近一次启动的浏览器进程
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -103,7 +106,24 @@ def _pids_on_port(port: int) -> list[str]:
 
 
 def kill_browser():
-    """杀掉占用调试端口的浏览器进程。"""
+    """杀掉浏览器及其所有子进程（进程组 → 端口占用者 → 兜底名字匹配）。"""
+    global _PROC
+
+    # 1) 按进程组一次杀干净（open_page 用了 start_new_session，pgid == 主进程 pid）
+    if _PROC is not None and not IS_WIN:
+        try:
+            if _PROC.poll() is None:
+                os.killpg(os.getpgid(_PROC.pid), signal.SIGKILL)
+        except Exception:
+            pass
+    if _PROC is not None:
+        try:
+            _PROC.wait(timeout=5)
+        except Exception:
+            pass
+        _PROC = None
+
+    # 2) 端口占用者
     for pid in _pids_on_port(PORT):
         try:
             if IS_WIN:
@@ -112,7 +132,15 @@ def kill_browser():
                 subprocess.run(["kill", "-9", pid], capture_output=True, timeout=10)
         except Exception:
             pass
-    time.sleep(1.5)
+
+    # 3) 兜底：按可执行文件路径杀残留子进程
+    if not IS_WIN:
+        for pat in ("/usr/bin/chromium", "/usr/lib/chromium", "remote-debugging-port"):
+            try:
+                subprocess.run(["pkill", "-9", "-f", pat], capture_output=True, timeout=10)
+            except Exception:
+                pass
+    time.sleep(1.0)
 
 
 def http_json(path: str):
@@ -223,9 +251,10 @@ def open_page():
     args.append("file://" + PAGE.replace("\\", "/"))
     os.makedirs(WORK, exist_ok=True)
     errlog = open(os.path.join(WORK, "chrome.log"), "ab")
-    subprocess.Popen([chrome] + args,
-                     stdout=errlog, stderr=errlog,
-                     start_new_session=not IS_WIN)
+    global _PROC
+    _PROC = subprocess.Popen([chrome] + args,
+                             stdout=errlog, stderr=errlog,
+                             start_new_session=not IS_WIN)
 
     # 等调试端口真正就绪（容器里冷启动可能要 10~30 秒，固定 sleep 不可靠）
     deadline = time.time() + int(os.getenv("CAPTCHA_START_TIMEOUT", "45"))
