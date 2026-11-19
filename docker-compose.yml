@@ -2,6 +2,9 @@ services:
   wechat-mp-fetcher:
     build: .
     restart: unless-stopped
+    # 用 tini 当 PID 1：python 不会回收孤儿子进程，僵尸进程会一直累积
+    # （曾累积到 4368 个，导致容器 Cannot fork）
+    init: true
     environment:
       TZ: Asia/Shanghai
       # 推荐 Web 扫码登录；这些变量只为兼容旧版手工凭证。
