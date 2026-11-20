@@ -85,6 +85,19 @@ def _og_description(html: str) -> str:
 
 
 def _fetch_html(url: str, timeout: float = 15.0) -> str:
+    """抓正文：两种 UA × 多轮重试（拦截是间歇性的）。"""
+    import time
+
+    for attempt in range(3):
+        html = _fetch_once(url, timeout)
+        if html:
+            return html
+        if attempt < 2:
+            time.sleep(4 * (attempt + 1))
+    return ""
+
+
+def _fetch_once(url: str, timeout: float = 15.0) -> str:
     import requests
 
     for ua in (UA_WECHAT, UA_DESKTOP):
@@ -157,6 +170,50 @@ def summary_of_url(url: str) -> str:
             logger.info("摘要命中拦截页文案，已丢弃")
             return ""
         return s
+    except Exception as exc:
+        logger.warning("摘要生成失败: %s", type(exc).__name__)
+        return ""
+
+def fetch_and_summarize(urls) -> tuple[str, str]:
+    """依次尝试多个链接，返回 (可用链接, 摘要)。
+
+    - 链接能抓到正文 → 用它做摘要，并作为推送链接
+    - 都抓不到 → 返回 ("", "")，调用方自行决定用哪个链接兜底
+    """
+    for url in urls:
+        if not url or not url.startswith("http"):
+            continue
+        try:
+            text = _fetch_text(url)
+        except Exception:
+            text = ""
+        if len(text) < 40:
+            continue
+        summ = _summarize_text(text)
+        return url, summ
+    return "", ""
+
+
+def _summarize_text(text: str) -> str:
+    """把正文交给模型生成 60~90 字摘要；失败返回空串。"""
+    key = _key()
+    if not key:
+        return ""
+    try:
+        from openai import OpenAI
+        try:
+            import ai_config
+            base, model = ai_config.text_base_url(), ai_config.text_model()
+        except Exception:
+            base, model = BASE_URL, MODEL
+        cli = OpenAI(api_key=key, base_url=base, timeout=60)
+        r = cli.chat.completions.create(model=model, messages=[
+            {"role": "user", "content": PROMPT + text[:MAX_CHARS]}])
+        out = (r.choices[0].message.content or "").strip()
+        out = re.sub(r"\s+", " ", out)[:180]
+        if any(mark in out for mark in ("轻点两下", "扫码", "环境异常", "完整服务")):
+            return ""
+        return out
     except Exception as exc:
         logger.warning("摘要生成失败: %s", type(exc).__name__)
         return ""

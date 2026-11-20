@@ -757,11 +757,23 @@ class SyncService:
                     short_match = re.fullmatch(r"MP_WXS_\d+_([A-Za-z0-9_~\-]{22})", article.review_id)
                     short_id = short_match.group(1) if short_match else ""
                     # token 含 '~' 时是无效短链（替换成 _ 也打不开），直接用长链
-                    if short_id and "~" not in short_id:
+                    # 短链和长链哪个能打开因文章而异，交给摘要模块挨个试：
+                    # 能抓到正文的那个既当推送链接，又拿来做摘要（一次请求两用）
+                    if short_id:
                         short_url = f"https://mp.weixin.qq.com/s/{short_id}"
                     else:
                         short_url = ""
-                    notifications.append({"title": article.title, "url": url, "short_url": short_url})
+                    item = {"title": article.title, "url": url, "short_url": short_url}
+                    try:
+                        link, summ = article_summary.fetch_and_summarize(
+                            [short_url, url])
+                        if link:
+                            item["link"] = link
+                        if summ:
+                            item["summary_text"] = summ
+                    except Exception as exc:
+                        logger.warning("准备链接/摘要失败: %s", type(exc).__name__)
+                    notifications.append(item)
                 # 每条文章单独推一条消息（避免一次堆很多条）
                 for item in notifications:
                     self.notify_webhooks("new_articles", {
@@ -804,7 +816,7 @@ class SyncService:
                     content = f"消息来源：{markdown_escape(payload.get('source_name', 'WeRSS'))}"
                     for article in payload.get("articles", []):
                         title = markdown_escape(article.get('title', '新文章'))
-                        link = self._pick_link(article)
+                        link = article.get("link") or self._pick_link(article)
                         if link:
                             content += f"\n\n[{title}]({link})"
                         else:
@@ -822,16 +834,18 @@ class SyncService:
                     for i, article in enumerate(articles):
                         title = markdown_escape(article.get('title', '新文章'))
                         short_url = article.get('short_url', '')
-                        link = self._pick_link(article)
+                        link = article.get("link") or self._pick_link(article)
                         if link:
                             chunk = f"\n\n[{title}]({link})"
                         else:
                             chunk = f"\n\n{title}"
                         if i < 3 and link:
-                            try:
-                                s_txt = article_summary.summary_of_url(link)
-                            except Exception:
-                                s_txt = ""
+                            s_txt = article.get("summary_text", "")
+                            if not s_txt:
+                                try:
+                                    s_txt = article_summary.summary_of_url(link)
+                                except Exception:
+                                    s_txt = ""
                             if s_txt:
                                 chunk += f"\n> {markdown_escape(s_txt)}"
                         size = len(chunk.encode("utf-8"))
