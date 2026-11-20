@@ -166,7 +166,16 @@ def summary_of_url(url: str) -> str:
             {"role": "user", "content": PROMPT + text[:MAX_CHARS]}])
         s = (r.choices[0].message.content or "").strip()
         s = re.sub(r"\s+", " ", s)[:180]
-        if any(mark in s for mark in ("轻点两下", "扫码", "环境异常", "完整服务")):
+        # 只拦「拦截页原文」的完整说法；"扫码"、"轻点两下" 这类词正常文章也会出现
+        TIP_PHRASES = (
+            "扫码即可使用完整服务",
+            "微信扫一扫可打开此内容",
+            "请在微信客户端打开链接",
+            "当前环境异常",
+            "完成验证后即可继续访问",
+            "该内容已被发布者删除",
+        )
+        if any(p in s for p in TIP_PHRASES):
             logger.info("摘要命中拦截页文案，已丢弃")
             return ""
         return s
@@ -211,7 +220,8 @@ def _summarize_text(text: str) -> str:
             {"role": "user", "content": PROMPT + text[:MAX_CHARS]}])
         out = (r.choices[0].message.content or "").strip()
         out = re.sub(r"\s+", " ", out)[:180]
-        if any(mark in out for mark in ("轻点两下", "扫码", "环境异常", "完整服务")):
+        if any(mark in out for mark in ("扫码即可使用完整服务", "微信扫一扫可打开此内容",
+                                         "请在微信客户端打开链接", "当前环境异常")):
             return ""
         return out
     except Exception as exc:
