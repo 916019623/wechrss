@@ -39,6 +39,14 @@ from wechat_mp_fetcher import (
 
 logger = logging.getLogger("wechrss.service")
 
+# 公众号分级对应的推送标记
+LEVEL_EMOJI = {
+    "必看": "🔥",
+    "重点关注": "⭐",
+    "补充监控": "📌",
+}
+
+
 APP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -826,7 +834,8 @@ class SyncService:
                     def markdown_escape(value):
                         return re.sub(r"([\\`*_{}\[\]<>])", r"\\\1", str(value).replace("\n", " "))
                     level = payload.get('level', '')
-                    prefix = f"【{level}】" if level else ""
+                    emoji = LEVEL_EMOJI.get(level, "")
+                    prefix = f"{emoji} " if emoji else ""
                     content = f"{prefix}消息来源：{markdown_escape(payload.get('source_name', 'WeRSS'))}"
                     for article in payload.get("articles", []):
                         title = markdown_escape(article.get('title', '新文章'))
@@ -841,7 +850,8 @@ class SyncService:
                         return re.sub(r"([\\`*_{}\[\]<>])", r"\\\1", str(value).replace("\n", " "))
                     source_name = payload.get('source_name', 'WeRSS')
                     level = payload.get('level', '')
-                    prefix = f"【{level}】" if level else ""
+                    emoji = LEVEL_EMOJI.get(level, "")
+                    prefix = f"{emoji} " if emoji else ""
                     content = f"{prefix}消息来源：{markdown_escape(source_name)}"
                     articles = payload.get("articles", [])
                     budget = 3800          # 企业微信 markdown 上限 4096 字节，留余量
