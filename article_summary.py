@@ -65,6 +65,25 @@ def _is_block_page(html: str) -> bool:
     return any(mark in html for mark in BLOCK_MARKS)
 
 
+def _og_description(html: str) -> str:
+    """从 og:description / msg_desc 里取文章摘要（新版图文页常见）。"""
+    for pat in (r'<meta property="og:description" content="(.*?)"',
+                r'var msg_desc = "(.*?)"'):
+        m = re.search(pat, html, re.S)
+        if not m:
+            continue
+        text = m.group(1)
+        text = text.replace("\\x0a", "\n").replace("\\n", "\n")
+        for a, b in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"),
+                     ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'")):
+            text = text.replace(a, b)
+        text = re.sub(r"[ \t\r\f\v]+", " ", text)
+        text = re.sub(r"\n{2,}", "\n", text).strip()
+        if len(text) >= 40:
+            return text
+    return ""
+
+
 def _fetch_html(url: str, timeout: float = 15.0) -> str:
     import requests
 
@@ -85,6 +104,10 @@ def _fetch_html(url: str, timeout: float = 15.0) -> str:
             continue
         if 'id="js_content"' in html or "rich_media_content" in html:
             return html
+        # 新版图文/小绿书没有 js_content，用 og:description 兜底
+        desc = _og_description(html)
+        if desc:
+            return "<html><body><p>" + desc + "</p></body></html>"
     return ""
 
 
@@ -116,7 +139,7 @@ def summary_of_url(url: str) -> str:
         text = _fetch_text(url)
     except Exception:
         return ""
-    if len(text) < 80:
+    if len(text) < 40:
         return ""
     try:
         from openai import OpenAI
