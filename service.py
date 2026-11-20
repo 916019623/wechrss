@@ -41,8 +41,8 @@ logger = logging.getLogger("wechrss.service")
 
 # 公众号分级对应的推送标记
 LEVEL_EMOJI = {
-    "必看": "🔥",
-    "重点关注": "⭐",
+    "必看": "❗❗❗",
+    "重点关注": "❗",
     "补充监控": "📌",
 }
 
