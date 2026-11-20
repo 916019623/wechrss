@@ -321,6 +321,7 @@ class WebApp:
                 self.db.update_source(
                     source_id, name=form.get("name", ""), interval_minutes=int(form.get("interval_minutes") or 360),
                     fetch_content=False, rss_limit=int(form.get("rss_limit") or 50),
+                    level=form.get("level", ""),
                 )
                 return self._redirect(start_response, f"/sources/{source_id}?message={quote('设置已保存')}")
 

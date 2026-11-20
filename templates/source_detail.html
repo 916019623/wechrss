@@ -88,6 +88,16 @@
         <div class="field-group"><label for="name">显示名称</label><input id="name" name="name" maxlength="120" value="{{ source.name }}"></div>
         <div class="field-group"><label for="interval">同步间隔（分钟）</label><input id="interval" type="number" min="60" max="10080" name="interval_minutes" value="{{ source.sync_interval_minutes }}"></div>
       </div>
+      <div class="field-group">
+        <label for="level">分级标签</label>
+        <select id="level" name="level">
+          <option value="" {% if not source.level %}selected{% endif %}>未分级</option>
+          <option value="必看" {% if source.level == '必看' %}selected{% endif %}>必看</option>
+          <option value="重点关注" {% if source.level == '重点关注' %}selected{% endif %}>重点关注</option>
+          <option value="补充监控" {% if source.level == '补充监控' %}selected{% endif %}>补充监控</option>
+        </select>
+        <p class="hint">推送时会在消息头部显示为【必看】/【重点关注】/【补充监控】</p>
+      </div>
       <div class="field-group"><label for="limit">Feed 文章上限</label><input id="limit" type="number" min="10" max="500" name="rss_limit" value="{{ source.rss_limit }}"></div>
       <button class="button" type="submit">保存设置</button>
     </form>

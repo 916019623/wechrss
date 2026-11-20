@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS sources (
     article_url TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1,
     fetch_content INTEGER NOT NULL DEFAULT 0,
+    level TEXT NOT NULL DEFAULT '',
     sync_interval_minutes INTEGER NOT NULL DEFAULT 360,
     rss_limit INTEGER NOT NULL DEFAULT 50,
     last_sync_at INTEGER NOT NULL DEFAULT 0,
@@ -105,6 +106,7 @@ class Source:
     created_at: int
     updated_at: int
     article_count: int = 0
+    level: str = ""
 
 
 @dataclass
@@ -261,6 +263,10 @@ class AppDB:
         self.path = path
         with self.connect() as conn:
             conn.executescript(APP_SCHEMA)
+            # 兼容旧库：补 level 列（分级标签）
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(sources)")}
+            if "level" not in cols:
+                conn.execute("ALTER TABLE sources ADD COLUMN level TEXT NOT NULL DEFAULT ''")
             # v4.1 removes public-article body fetching from the Web product.
             # Keep the legacy column for database compatibility, but force it off.
             conn.execute("UPDATE sources SET fetch_content=0 WHERE fetch_content<>0")
@@ -281,6 +287,7 @@ class AppDB:
             last_sync_at=row["last_sync_at"], next_sync_at=row["next_sync_at"], last_status=row["last_status"],
             last_error=row["last_error"], created_at=row["created_at"], updated_at=row["updated_at"],
             article_count=row["article_count"] if "article_count" in row.keys() else 0,
+            level=(row["level"] if "level" in row.keys() else "") or "",
         )
 
 
@@ -352,11 +359,14 @@ class AppDB:
         return result
 
     def update_source(self, source_id: int, *, name: str, interval_minutes: int, fetch_content: bool,
-                      rss_limit: int, enabled: bool | None = None) -> None:
+                      rss_limit: int, enabled: bool | None = None, level: str | None = None) -> None:
         interval_minutes = max(60, min(int(interval_minutes), 10080))
         rss_limit = max(10, min(int(rss_limit), 500))
         fields = ["name=?", "sync_interval_minutes=?", "fetch_content=?", "rss_limit=?", "updated_at=?"]
         values: list[Any] = [name.strip(), interval_minutes, 0, rss_limit, int(time.time())]
+        if level is not None:
+            fields.insert(0, "level=?")
+            values.insert(0, level.strip())
         if enabled is not None:
             fields.append("enabled=?")
             values.append(int(enabled))
@@ -780,6 +790,7 @@ class SyncService:
                     self.notify_webhooks("new_articles", {
                         "source_id": source.id,
                         "source_name": source.name,
+                        "level": getattr(source, "level", "") or "",
                         "book_id": source.book_id,
                         "new_count": 1,
                         "received": result.received,
@@ -814,7 +825,9 @@ class SyncService:
                 if is_dingtalk:
                     def markdown_escape(value):
                         return re.sub(r"([\\`*_{}\[\]<>])", r"\\\1", str(value).replace("\n", " "))
-                    content = f"消息来源：{markdown_escape(payload.get('source_name', 'WeRSS'))}"
+                    level = payload.get('level', '')
+                    prefix = f"【{level}】" if level else ""
+                    content = f"{prefix}消息来源：{markdown_escape(payload.get('source_name', 'WeRSS'))}"
                     for article in payload.get("articles", []):
                         title = markdown_escape(article.get('title', '新文章'))
                         link = article.get("link") or self._pick_link(article)
@@ -827,7 +840,9 @@ class SyncService:
                     def markdown_escape(value):
                         return re.sub(r"([\\`*_{}\[\]<>])", r"\\\1", str(value).replace("\n", " "))
                     source_name = payload.get('source_name', 'WeRSS')
-                    content = f"消息来源：{markdown_escape(source_name)}"
+                    level = payload.get('level', '')
+                    prefix = f"【{level}】" if level else ""
+                    content = f"{prefix}消息来源：{markdown_escape(source_name)}"
                     articles = payload.get("articles", [])
                     budget = 3800          # 企业微信 markdown 上限 4096 字节，留余量
                     used = 0
