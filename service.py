@@ -760,7 +760,8 @@ class SyncService:
                     # 短链和长链哪个能打开因文章而异，交给摘要模块挨个试：
                     # 能抓到正文的那个既当推送链接，又拿来做摘要（一次请求两用）
                     if short_id:
-                        short_url = f"https://mp.weixin.qq.com/s/{short_id}"
+                        # 微信短链 token 里 '~' 对应 '_'，必须替换后才合法
+                        short_url = f"https://mp.weixin.qq.com/s/{short_id.replace('~', '_')}"
                     else:
                         short_url = ""
                     item = {"title": article.title, "url": url, "short_url": short_url}
